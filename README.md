@@ -1,0 +1,2 @@
+# SpectraIIM
+ SpectraIIM (ISP Internet Monitoring) is a lightweight, server-based tool designed to help consumers log and generate comprehensive reports on internet health. By continuously monitoring network performance, SpectraIIM provides users with detailed evidence to hold their ISPs accountable for service issues. The tool is container-friendly, ensuring it runs seamlessly 24/7 in a modern, scalable environment.
