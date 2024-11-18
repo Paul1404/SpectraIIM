@@ -1,0 +1,16 @@
+version: '3.8'
+services:
+  postgres:
+    image: postgres:15
+    container_name: spectra_postgres
+    environment:
+      POSTGRES_USER: spectra  # Application user (default user created by init)
+      POSTGRES_PASSWORD: 55fvqfSGi27WdMNbFJxPL  # Password for the application user
+      POSTGRES_DB: spectraiim  # Default database created at init
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:

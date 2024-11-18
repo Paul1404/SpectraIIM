@@ -1,41 +1,84 @@
-import sqlite3
-import os
 import time
 import subprocess
-from datetime import datetime
+from datetime import datetime, timedelta
 import platform
+import psycopg2
+from speedtest import Speedtest, ConfigRetrievalError
 
 # Configuration
-PING_TARGET = "8.8.8.8"  # Default target for pinging
-DNS_TEST_DOMAIN = "google.com"  # Domain to test DNS resolution
+PING_TARGET = "1.1.1.1"  # Default target for pinging
+DNS_TEST_DOMAIN = "one.one.one.one"  # Domain to test DNS resolution
 PING_INTERVAL = 60  # Interval in seconds between tests
-DB_FILE = "spectra_iim.db"
+SPEEDTEST_INTERVAL = 1800  # Interval in seconds between speed tests (30 minutes)
 
-# Database setup
+from logging_setup import setup_logger  # Import the logging setup function
+
+# Set up the logger
+logger = setup_logger()
+
+
+# Application user configuration (used for queries on the specific database)
+DB_CONFIG = {
+    "dbname": "spectraiim",  # The target database for SpectraIIM
+    "user": "spectra",
+    "password": "55fvqfSGi27WdMNbFJxPL",
+    "host": "localhost",
+    "port": 5432
+}
+
+def validate_database_connection():
+    """Validate database connection for the application user."""
+    try:
+        with psycopg2.connect(**DB_CONFIG) as conn:
+            logger.info("Database connection successful!")
+    except psycopg2.OperationalError as op_err:
+        logger.error(f"Operational error during database connection: {op_err}")
+        raise
+    except Exception as e:
+        logger.exception(f"Unexpected error connecting to database: {e}")
+        raise
+
+
+
 def setup_database():
-    """Create the database and table if they do not exist."""
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("""
+    """Create the PostgreSQL database table if it does not exist."""
+    logger.info("Starting database setup...")
+    try:
+        validate_database_connection()
+        logger.debug("Database connection validated.")
+
+        create_table_query = """
         CREATE TABLE IF NOT EXISTS network_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp TEXT NOT NULL,
+            id SERIAL PRIMARY KEY,
+            timestamp TIMESTAMP NOT NULL,
             latency_ms REAL,
             packet_loss REAL,
-            jitter_ms REAL,
+            jitter_ms REAL,  -- New column for jitter
             download_speed REAL,
             upload_speed REAL,
             dns_resolution_time_ms REAL,
-            downtime INTEGER,
+            downtime BOOLEAN,
             traceroute TEXT
         )
-    """)
-    conn.commit()
-    conn.close()
+        """
+        # Connect as the application user to create the table
+        with psycopg2.connect(**DB_CONFIG) as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(create_table_query)
+                conn.commit()
+                logger.info("Table 'network_logs' is ready.")
+    except psycopg2.Error as db_err:
+        logger.error(f"Database error during setup: {db_err}")
+        raise
+    except Exception as e:
+        logger.exception(f"Unexpected error during database setup: {e}")
+        raise
+
 
 # Ping function
 def ping_target(target: str):
     """Ping a target and return latency, jitter, and packet loss."""
+    logger.info(f"Starting ping test to target: {target}")
     try:
         result = subprocess.run(
             ["ping", "-c", "4", target],
@@ -46,37 +89,77 @@ def ping_target(target: str):
         if result.returncode == 0:
             lines = result.stdout.split("\n")
             rtt_line = next((line for line in lines if "rtt min/avg/max" in line), None)
-            stats = rtt_line.split("=")[1].strip() if rtt_line else None
-            latency_avg = float(stats.split("/")[1]) if stats else None
-            jitter = float(stats.split("/")[2]) - float(stats.split("/")[0]) if stats else None
-            return latency_avg, jitter, 0.0  # 0% packet loss if successful
+            if rtt_line:
+                stats = rtt_line.split("=")[1].strip().replace(" ms", "")
+                min_rtt, avg_rtt, max_rtt, _ = map(float, stats.split("/"))
+                jitter = max_rtt - min_rtt
+                logger.debug(f"Ping stats: Latency={avg_rtt} ms, Jitter={jitter} ms")
+                return avg_rtt, jitter, 0.0  # 0% packet loss if successful
+            else:
+                logger.warning("Ping output did not contain RTT stats.")
+                return None, None, 100.0  # 100% packet loss
         else:
+            logger.warning(f"Ping command failed with return code {result.returncode}.")
             return None, None, 100.0  # 100% packet loss if ping fails
-    except Exception as e:
-        print(f"Error during ping: {e}")
+    except subprocess.TimeoutExpired:
+        logger.error(f"Ping command timed out for target: {target}")
         return None, None, 100.0
+    except Exception as e:
+        logger.exception(f"Error during ping to {target}: {e}")
+        return None, None, 100.0
+
+
 
 # DNS resolution time test
 def test_dns_resolution(domain: str):
     """Test DNS resolution time."""
+    logger.info(f"Starting DNS resolution test for domain: {domain}")
     try:
         start_time = time.time()
-        subprocess.run(["nslookup", domain], capture_output=True, timeout=5)
+        result = subprocess.run(
+            ["nslookup", domain],
+            capture_output=True,
+            timeout=5
+        )
         end_time = time.time()
-        return (end_time - start_time) * 1000  # Convert to milliseconds
-    except Exception as e:
-        print(f"DNS resolution test failed: {e}")
+        if result.returncode == 0:
+            resolution_time = (end_time - start_time) * 1000  # Convert to milliseconds
+            logger.debug(f"DNS resolution time for {domain}: {resolution_time:.2f} ms")
+            return resolution_time
+        else:
+            logger.warning(f"DNS resolution command failed with return code {result.returncode}.")
+            return None
+    except subprocess.TimeoutExpired:
+        logger.error(f"DNS resolution command timed out for domain: {domain}")
         return None
+    except Exception as e:
+        logger.exception(f"Error during DNS resolution for {domain}: {e}")
+        return None
+
 
 # Speed test (dummy placeholder for actual implementation)
 def test_speed():
     """Perform speed tests and return download/upload speeds."""
-    # TODO: Replace with a library like speedtest-cli for real results
-    return 50.0, 10.0  # Dummy download/upload speeds in Mbps
+    logger.info("Starting speed test.")
+    try:
+        st = Speedtest()
+        st.get_best_server()
+        download_speed = st.download() / 1_000_000  # Convert to Mbps
+        upload_speed = st.upload() / 1_000_000  # Convert to Mbps
+        logger.debug(f"Speed test results: Download={download_speed:.2f} Mbps, Upload={upload_speed:.2f} Mbps")
+        return download_speed, upload_speed
+    except ConfigRetrievalError as e:
+        logger.error(f"Blocked by Speedtest API: {e}")
+        return None, None
+    except Exception as e:
+        logger.error(f"Error during speed test: {e}")
+        return None, None
+
 
 # Traceroute test
 def perform_traceroute(target: str):
     """Perform a traceroute and return the path as a string."""
+    logger.info(f"Starting traceroute to target: {target}")
     traceroute_command = ["tracert", target] if platform.system() == "Windows" else ["traceroute", target]
     try:
         result = subprocess.run(
@@ -84,35 +167,69 @@ def perform_traceroute(target: str):
             capture_output=True,
             text=True,
             timeout=30,
-            encoding="utf-8",  # Ensure proper decoding
-            errors="replace"   # Replace problematic characters
+            encoding="utf-8",
+            errors="replace"
         )
-        return result.stdout.strip() if result.returncode == 0 else "Traceroute failed"
+        if result.returncode == 0:
+            logger.debug(f"Traceroute to {target} completed successfully.")
+            return result.stdout.strip()
+        else:
+            logger.warning(f"Traceroute to {target} failed with return code {result.returncode}.")
+            return "Traceroute failed"
+    except subprocess.TimeoutExpired:
+        logger.error(f"Traceroute command timed out for target: {target}")
+        return "Traceroute timeout"
     except Exception as e:
-        print(f"Traceroute failed: {e}")
+        logger.exception(f"Unexpected error during traceroute to {target}: {e}")
         return "Traceroute error"
 
+
 # Log results to database
-def log_to_database(timestamp, latency, jitter, packet_loss, download, upload, dns_time, downtime, traceroute):
-    """Log results into the SQLite database."""
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO network_logs (
-            timestamp, latency_ms, jitter_ms, packet_loss, 
-            download_speed, upload_speed, dns_resolution_time_ms, 
-            downtime, traceroute
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (timestamp, latency, jitter, packet_loss, download, upload, dns_time, downtime, traceroute))
-    conn.commit()
-    conn.close()
+def log_to_database(log_data):
+    """Log results into the PostgreSQL database."""
+    logger.info("Attempting to log data to the database.")
+    insert_query = """
+    INSERT INTO network_logs (
+        timestamp, latency_ms, jitter_ms, packet_loss, 
+        download_speed, upload_speed, dns_resolution_time_ms, 
+        downtime, traceroute
+    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+    """
+    try:
+        with psycopg2.connect(**DB_CONFIG) as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(insert_query, log_data)
+                conn.commit()
+                logger.debug(f"Data logged successfully: {log_data}")
+    except psycopg2.IntegrityError as int_err:
+        logger.error(f"Integrity error while logging data: {int_err}")
+    except psycopg2.OperationalError as op_err:
+        logger.error(f"Operational error: {op_err}. Retrying...")
+        time.sleep(5)  # Wait before retrying
+        try:
+            with psycopg2.connect(**DB_CONFIG) as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(insert_query, log_data)
+                    conn.commit()
+                    logger.debug(f"Data logged successfully after retry: {log_data}")
+        except Exception as retry_err:
+            logger.exception(f"Retry failed: {retry_err}")
+    except Exception as e:
+        logger.exception(f"Unexpected error while logging to database: {e}")
+
+
 
 # Main monitoring loop
 def monitor_network():
     """Continuously monitor the network and log metrics."""
-    print("Starting network monitoring...")
+    logger.info("Starting network monitoring...")
+
+    last_speedtest_time = datetime.min  # Initialize last speed test timestamp
+    downtime_start = None  # Track when downtime begins
+    cumulative_downtime = timedelta(0)  # Total downtime
+
     while True:
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        timestamp = datetime.now()
 
         # Measure latency, jitter, and packet loss
         latency, jitter, packet_loss = ping_target(PING_TARGET)
@@ -120,29 +237,67 @@ def monitor_network():
         # Test DNS resolution time
         dns_time = test_dns_resolution(DNS_TEST_DOMAIN)
 
-        # Perform speed tests
-        download_speed, upload_speed = test_speed()
+        # Determine if a speed test should run
+        run_speedtest = False
+        if timestamp - last_speedtest_time >= timedelta(seconds=SPEEDTEST_INTERVAL):
+            logger.info("Scheduled speed test interval reached.")
+            run_speedtest = True
+        elif latency is None or latency > 100 or packet_loss > 5.0:
+            logger.warning("High latency or packet loss detected. Triggering speed test.")
+            run_speedtest = True
+
+        # Perform speed test if conditions are met
+        if run_speedtest:
+            download_speed, upload_speed = test_speed()
+            last_speedtest_time = timestamp
+        else:
+            download_speed, upload_speed = None, None
 
         # Perform traceroute
         traceroute = perform_traceroute(PING_TARGET)
 
-        # Calculate downtime (assume no response = 100% downtime for now)
-        downtime = 1 if latency is None else 0
+        # Log downtime status
+        is_downtime = latency is None
+        if is_downtime:
+            if downtime_start is None:
+                downtime_start = timestamp
+                logger.warning(f"Downtime started at {timestamp}.")
+        else:
+            if downtime_start:
+                downtime_duration = timestamp - downtime_start
+                cumulative_downtime += downtime_duration
+                logger.info(f"Downtime ended. Duration: {downtime_duration}. Total downtime: {cumulative_downtime}.")
+                downtime_start = None
 
-        # Log results
-        log_to_database(
-            timestamp, latency, jitter, packet_loss, 
-            download_speed, upload_speed, dns_time, 
-            downtime, traceroute
+        # Prepare data for logging
+        log_data = (
+            timestamp, latency, jitter, packet_loss,
+            download_speed, upload_speed, dns_time,
+            is_downtime, traceroute
         )
 
-        # Print results for debugging
-        print(f"[{timestamp}] Latency: {latency} ms, Jitter: {jitter} ms, Packet Loss: {packet_loss}%, "
-              f"Download: {download_speed} Mbps, Upload: {upload_speed} Mbps, "
-              f"DNS Time: {dns_time} ms, Downtime: {downtime}, Traceroute: {traceroute}")
+        # Log results to database
+        log_to_database(log_data)
 
+        # Print results for debugging
+        logger.info(f"[{timestamp}] Latency: {latency} ms, Jitter: {jitter} ms, Packet Loss: {packet_loss}%, "
+                    f"Download: {download_speed if download_speed else 'N/A'} Mbps, "
+                    f"Upload: {upload_speed if upload_speed else 'N/A'} Mbps, "
+                    f"DNS Time: {dns_time} ms, Downtime: {is_downtime}, Traceroute: {traceroute}")
+
+        # Wait for the next ping interval
         time.sleep(PING_INTERVAL)
 
+
 if __name__ == "__main__":
-    setup_database()
-    monitor_network()
+    try:
+        logger.info("Initializing the SpectraIIM network monitoring service...")
+        setup_database()
+        monitor_network()
+    except KeyboardInterrupt:
+        logger.warning("SpectraIIM monitoring service interrupted by user. Exiting...")
+    except Exception as e:
+        logger.exception(f"Critical failure in the SpectraIIM monitoring service: {e}")
+    finally:
+        logger.info("SpectraIIM monitoring service has stopped.")
+
