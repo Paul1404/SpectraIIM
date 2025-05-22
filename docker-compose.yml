@@ -1,15 +1,62 @@
 services:
   postgres:
-    image: postgres:15
+    image: postgres:latest
     container_name: spectra_postgres
     environment:
-      POSTGRES_USER: spectra  # Application user (default user created by init)
-      POSTGRES_PASSWORD: REPLACE-ME  # Password for the application user
-      POSTGRES_DB: spectraiim  # Default database created at init
+      POSTGRES_USER: spectra
+      POSTGRES_PASSWORD: spectra_password
+      POSTGRES_DB: spectraiim
     ports:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U spectra"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  monitor:
+    image: ghcr.io/paul1404/spectraiim:latest
+    container_name: spectra_monitor
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB_NAME: spectraiim
+      DB_USER: spectra
+      DB_PASSWORD: spectra_password
+      DB_HOST: postgres
+      DB_PORT: 5432
+      PING_TARGET: 1.1.1.1
+      DNS_TEST_DOMAIN: one.one.one.one
+      PING_INTERVAL: 60
+      SPEEDTEST_INTERVAL: 1800
+      LOG_LEVEL: INFO
+    cap_add:
+      - NET_RAW
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana-oss:latest
+    container_name: spectra_grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_DATABASE_TYPE: postgres
+      GF_DATABASE_HOST: postgres:5432
+      GF_DATABASE_NAME: spectraiim
+      GF_DATABASE_USER: spectra
+      GF_DATABASE_PASSWORD: spectra_password
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - grafana_data:/var/lib/grafana
+    restart: unless-stopped
 
 volumes:
   postgres_data:
+  grafana_data:

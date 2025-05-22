@@ -1,3 +1,4 @@
+import shutil
 import time
 import subprocess
 import platform
@@ -139,9 +140,19 @@ def test_speed() -> Tuple[Optional[float], Optional[float]]:
         return None, None
 
 def perform_traceroute(target: str) -> str:
-    """Perform a traceroute and return the path as a string."""
+    """Perform a traceroute and return the path as a string, or a message if unavailable."""
     logger.info(f"Starting traceroute to target: {target}")
-    traceroute_command = ["tracert", target] if platform.system() == "Windows" else ["traceroute", target]
+    if platform.system() == "Windows":
+        traceroute_cmd = "tracert"
+    else:
+        traceroute_cmd = "traceroute"
+
+    # Check if the command exists
+    if shutil.which(traceroute_cmd) is None:
+        logger.warning(f"{traceroute_cmd} is not available on this system.")
+        return f"{traceroute_cmd} not available"
+
+    traceroute_command = [traceroute_cmd, target]
     try:
         result = subprocess.run(
             traceroute_command,
