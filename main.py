@@ -21,7 +21,7 @@ logger = setup_logger()
 DB_CONFIG = {
     "dbname": "spectraiim",  # The target database for SpectraIIM
     "user": "spectra",
-    "password": "55fvqfSGi27WdMNbFJxPL",
+    "password": "REPLACE-ME",
     "host": "localhost",
     "port": 5432
 }
