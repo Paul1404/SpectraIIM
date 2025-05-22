@@ -1,0 +1,11 @@
+[project]
+name = "spectraiim"
+version = "0.1.0"
+description = "SpectraIIM (ISP Internet Monitoring) is a lightweight, server-based tool designed to help consumers log and generate comprehensive reports on internet health. By continuously monitoring network performance."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "loguru>=0.7.3",
+    "psycopg2-binary>=2.9.10",
+    "speedtest-cli>=2.1.3",
+]
