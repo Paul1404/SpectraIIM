@@ -1,0 +1,63 @@
+{
+    "id": null,
+    "uid": "spectraiim",
+    "title": "Spectraiim Network Monitoring",
+    "tags": ["network", "monitoring"],
+    "timezone": "browser",
+    "schemaVersion": 37,
+    "version": 1,
+    "refresh": "30s",
+    "panels": [
+        {
+            "type": "timeseries",
+            "title": "Latency (ms)",
+            "datasource": "Spectraiim",
+            "fieldConfig": {
+                "defaults": {},
+                "overrides": []
+            },
+            "targets": [
+                {
+                    "format": "time_series",
+                    "rawSql": "SELECT timestamp AS \"time\", latency_ms FROM network_logs ORDER BY timestamp ASC",
+                    "refId": "A"
+                }
+            ],
+            "gridPos": { "h": 8, "w": 24, "x": 0, "y": 0 }
+        },
+        {
+            "type": "timeseries",
+            "title": "Download Speed (Mbps)",
+            "datasource": "Spectraiim",
+            "fieldConfig": {
+                "defaults": {},
+                "overrides": []
+            },
+            "targets": [
+                {
+                    "format": "time_series",
+                    "rawSql": "SELECT timestamp AS \"time\", download_speed FROM network_logs ORDER BY timestamp ASC",
+                    "refId": "A"
+                }
+            ],
+            "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 }
+        },
+        {
+            "type": "timeseries",
+            "title": "Upload Speed (Mbps)",
+            "datasource": "Spectraiim",
+            "fieldConfig": {
+                "defaults": {},
+                "overrides": []
+            },
+            "targets": [
+                {
+                    "format": "time_series",
+                    "rawSql": "SELECT timestamp AS \"time\", upload_speed FROM network_logs ORDER BY timestamp ASC",
+                    "refId": "A"
+                }
+            ],
+            "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 }
+        }
+    ]
+}

@@ -11,7 +11,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U spectra"]
+      test: ["CMD-SHELL", "pg_isready -U spectra -d spectraiim"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -43,11 +43,6 @@ services:
     environment:
       GF_SECURITY_ADMIN_USER: admin
       GF_SECURITY_ADMIN_PASSWORD: admin
-      GF_DATABASE_TYPE: postgres
-      GF_DATABASE_HOST: postgres:5432
-      GF_DATABASE_NAME: spectraiim
-      GF_DATABASE_USER: spectra
-      GF_DATABASE_PASSWORD: spectra_password
     ports:
       - "3000:3000"
     depends_on:
@@ -55,6 +50,8 @@ services:
         condition: service_healthy
     volumes:
       - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources
+      - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards
     restart: unless-stopped
 
 volumes:
