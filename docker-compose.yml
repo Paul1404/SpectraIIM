@@ -1,17 +1,20 @@
 services:
-  postgres:
-    image: postgres:latest
-    container_name: spectra_postgres
-    environment:
-      POSTGRES_USER: spectra
-      POSTGRES_PASSWORD: spectra_password
-      POSTGRES_DB: spectraiim
+  influxdb:
+    image: influxdb:2.7
+    container_name: spectra_influxdb
     ports:
-      - "5432:5432"
+      - "8086:8086"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - influxdb_data:/var/lib/influxdb2
+    environment:
+      - DOCKER_INFLUXDB_INIT_MODE=setup
+      - DOCKER_INFLUXDB_INIT_USERNAME=spectra
+      - DOCKER_INFLUXDB_INIT_PASSWORD=spectra_password
+      - DOCKER_INFLUXDB_INIT_ORG=spectra_org
+      - DOCKER_INFLUXDB_INIT_BUCKET=network_logs
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=spectra_token
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U spectra -d spectraiim"]
+      test: ["CMD", "curl", "-f", "http://localhost:8086/health"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -20,14 +23,13 @@ services:
     image: ghcr.io/paul1404/spectraiim:latest
     container_name: spectra_monitor
     depends_on:
-      postgres:
+      influxdb:
         condition: service_healthy
     environment:
-      DB_NAME: spectraiim
-      DB_USER: spectra
-      DB_PASSWORD: spectra_password
-      DB_HOST: postgres
-      DB_PORT: 5432
+      INFLUXDB_URL: http://influxdb:8086
+      INFLUXDB_TOKEN: spectra_token
+      INFLUXDB_ORG: spectra_org
+      INFLUXDB_BUCKET: network_logs
       PING_TARGET: 1.1.1.1
       DNS_TEST_DOMAIN: one.one.one.one
       PING_INTERVAL: 60
@@ -46,7 +48,7 @@ services:
     ports:
       - "3000:3000"
     depends_on:
-      postgres:
+      influxdb:
         condition: service_healthy
     volumes:
       - grafana_data:/var/lib/grafana
@@ -55,5 +57,5 @@ services:
     restart: unless-stopped
 
 volumes:
-  postgres_data:
+  influxdb_data:
   grafana_data:

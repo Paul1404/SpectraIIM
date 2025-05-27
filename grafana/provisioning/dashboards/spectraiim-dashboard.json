@@ -1,0 +1,245 @@
+{
+  "id": null,
+  "uid": "network-dashboard",
+  "title": "Network Monitoring",
+  "tags": ["network", "influxdb"],
+  "timezone": "browser",
+  "schemaVersion": 38,
+  "version": 3,
+  "refresh": "30s",
+  "panels": [
+    {
+      "type": "row",
+      "title": "Network Quality",
+      "gridPos": { "x": 0, "y": 0, "w": 24, "h": 1 },
+      "collapsed": false
+    },
+    {
+      "type": "stat",
+      "title": "Current Latency",
+      "description": "Latest measured average latency to target.",
+      "gridPos": { "x": 0, "y": 1, "w": 4, "h": 4 },
+      "datasource": { "type": "influxdb", "uid": "spectraiim-influxdb" },
+      "targets": [
+        {
+            "query": "from(bucket: \"network_logs\") |> range(start: -6h) |> filter(fn: (r) => r._measurement == \"network_log\" and r._field == \"latency_ms\") |> last()",
+            "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+          "defaults": {
+              "unit": "ms",
+              "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                      { "color": "green", "value": null },
+                      { "color": "yellow", "value": 50 },
+                      { "color": "red", "value": 100 }
+                  ]
+              }
+          }
+      }
+    },
+    {
+        "type": "stat",
+        "title": "Current Jitter",
+        "description": "Latest measured jitter.",
+        "gridPos": { "x": 4, "y": 1, "w": 4, "h": 4 },
+        "datasource": { "type": "influxdb", "uid": "spectraiim-influxdb" },
+        "targets": [
+            {
+                "query": "from(bucket: \"network_logs\") |> range(start: -6h) |> filter(fn: (r) => r._measurement == \"network_log\" and r._field == \"jitter_ms\") |> last()",
+                "refId": "A"
+            }
+        ],
+        "fieldConfig": {
+            "defaults": {
+                "unit": "ms",
+                "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                        { "color": "green", "value": null },
+                        { "color": "yellow", "value": 10 },
+                        { "color": "red", "value": 30 }
+                    ]
+                }
+            }
+        }
+    },
+    {
+        "type": "stat",
+        "title": "Current Packet Loss",
+        "description": "Latest measured packet loss.",
+        "gridPos": { "x": 8, "y": 1, "w": 4, "h": 4 },
+        "datasource": { "type": "influxdb", "uid": "spectraiim-influxdb" },
+        "targets": [
+            {
+                "query": "from(bucket: \"network_logs\") |> range(start: -6h) |> filter(fn: (r) => r._measurement == \"network_log\" and r._field == \"packet_loss\") |> last()",
+                "refId": "A"
+            }
+        ],
+        "fieldConfig": {
+            "defaults": {
+                "unit": "percent",
+                "thresholds": {
+                    "mode": "absolute",
+                    "steps": [
+                        { "color": "green", "value": null },
+                        { "color": "yellow", "value": 1 },
+                        { "color": "red", "value": 5 }
+                    ]
+                }
+            }
+        }
+    },
+    {
+        "type": "stat",
+        "title": "Current Downtime",
+        "description": "Shows if the last check was up or down.",
+        "gridPos": { "x": 12, "y": 1, "w": 4, "h": 4 },
+        "datasource": { "type": "influxdb", "uid": "spectraiim-influxdb" },
+        "targets": [
+            {
+                "query": "from(bucket: \"network_logs\") |> range(start: -6h) |> filter(fn: (r) => r._measurement == \"network_log\" and r._field == \"downtime\") |> last()",
+                "refId": "A"
+            }
+        ],
+        "fieldConfig": {
+            "defaults": {
+                "mappings": [
+                    { "type": "value", "options": { "0": { "text": "Up", "color": "green" }, "1": { "text": "Down", "color": "red" } } }
+                ]
+            }
+        }
+    },
+    {
+        "type": "row",
+        "title": "Speed & DNS",
+        "gridPos": { "x": 0, "y": 5, "w": 24, "h": 1 },
+        "collapsed": false
+    },
+    {
+        "type": "timeseries",
+        "title": "Download Speed (Mbps)",
+        "gridPos": { "x": 0, "y": 6, "w": 12, "h": 6 },
+        "datasource": { "type": "influxdb", "uid": "spectraiim-influxdb" },
+        "targets": [
+            {
+                "query": "from(bucket: \"network_logs\") |> range(start: -6h) |> filter(fn: (r) => r._measurement == \"network_log\" and r._field == \"download_speed\")",
+                "refId": "A"
+            }
+        ],
+        "fieldConfig": { "defaults": { "unit": "Mbps" } }
+    },
+    {
+        "type": "timeseries",
+        "title": "Upload Speed (Mbps)",
+        "gridPos": { "x": 12, "y": 6, "w": 12, "h": 6 },
+        "datasource": { "type": "influxdb", "uid": "spectraiim-influxdb" },
+        "targets": [
+            {
+                "query": "from(bucket: \"network_logs\") |> range(start: -6h) |> filter(fn: (r) => r._measurement == \"network_log\" and r._field == \"upload_speed\")",
+                "refId": "A"
+            }
+        ],
+        "fieldConfig": { "defaults": { "unit": "Mbps" } }
+    },
+    {
+        "type": "timeseries",
+        "title": "DNS Resolution Time (ms)",
+        "gridPos": { "x": 0, "y": 12, "w": 12, "h": 6 },
+        "datasource": { "type": "influxdb", "uid": "spectraiim-influxdb" },
+        "targets": [
+            {
+                "query": "from(bucket: \"network_logs\") |> range(start: -6h) |> filter(fn: (r) => r._measurement == \"network_log\" and r._field == \"dns_resolution_time_ms\")",
+                "refId": "A"
+            }
+        ],
+        "fieldConfig": { "defaults": { "unit": "ms" } }
+    },
+    {
+        "type": "row",
+        "title": "Traceroute",
+        "gridPos": { "x": 0, "y": 18, "w": 24, "h": 1 },
+        "collapsed": false
+    },
+    {
+        "type": "stat",
+        "title": "Hop Count (Last Run)",
+        "description": "Number of hops in the last traceroute.",
+        "gridPos": { "x": 0, "y": 19, "w": 4, "h": 4 },
+        "datasource": { "type": "influxdb", "uid": "spectraiim-influxdb" },
+        "targets": [
+            {
+                "query": "from(bucket: \"network_logs\") |> range(start: -6h) |> filter(fn: (r) => r._measurement == \"network_log\" and r._field == \"traceroute_hop_count\") |> last()",
+                "refId": "A"
+            }
+        ]
+    },
+    {
+        "type": "stat",
+        "title": "Last Hop IP",
+        "description": "IP address of the last hop in the last traceroute.",
+        "gridPos": { "x": 4, "y": 19, "w": 6, "h": 4 },
+        "datasource": { "type": "influxdb", "uid": "spectraiim-influxdb" },
+        "targets": [
+            {
+                "query": "from(bucket: \"network_logs\") |> range(start: -6h) |> filter(fn: (r) => r._measurement == \"network_log\" and r._field == \"traceroute_last_hop_ip\") |> last()",
+                "refId": "A"
+            }
+        ]
+    },
+    {
+        "type": "stat",
+        "title": "Max Hop Latency (ms)",
+        "description": "Maximum latency among all hops in the last traceroute.",
+        "gridPos": { "x": 10, "y": 19, "w": 6, "h": 4 },
+        "datasource": { "type": "influxdb", "uid": "spectraiim-influxdb" },
+        "targets": [
+            {
+                "query": "from(bucket: \"network_logs\") |> range(start: -6h) |> filter(fn: (r) => r._measurement == \"network_log\" and r._field == \"traceroute_max_hop_latency\") |> last()",
+                "refId": "A"
+            }
+        ],
+        "fieldConfig": { "defaults": { "unit": "ms" } }
+    },
+    {
+        "type": "table",
+        "title": "Traceroute Hops (Last 10 Runs)",
+        "description": "All hops for the last 10 traceroute runs.",
+        "gridPos": { "x": 0, "y": 23, "w": 24, "h": 8 },
+        "datasource": { "type": "influxdb", "uid": "spectraiim-influxdb" },
+        "targets": [
+            {
+                "query": "from(bucket: \"network_logs\") |> range(start: -6h) |> filter(fn: (r) => r._measurement == \"network_log\" and r._field == \"traceroute_hops_json\") |> sort(columns: [\"_time\"], desc: true) |> limit(n:10)",
+                "refId": "A"
+            }
+        ],
+        "transformations": [
+            {
+                "id": "extractFields",
+                "options": {
+                    "replaceFields": false,
+                    "fields": {
+                        "traceroute_hops_json": {
+                            "type": "json"
+                        }
+                    }
+                }
+            },
+            {
+                "id": "explode",
+                "options": {
+                    "field": "traceroute_hops_json"
+                }
+            }
+        ],
+        "columns": [
+            { "text": "Time", "field": "_time" },
+            { "text": "Hop", "field": "hop" },
+            { "text": "IP", "field": "ip" },
+            { "text": "Latency (ms)", "field": "latency" }
+        ]
+    }
+  ]
+}

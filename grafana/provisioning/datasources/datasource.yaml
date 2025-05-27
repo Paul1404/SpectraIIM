@@ -1,14 +1,16 @@
 apiVersion: 1
 datasources:
   - name: Spectraiim
-    type: postgres
+    type: influxdb
     access: proxy
-    url: postgres:5432
-    database: spectraiim
-    user: spectra
-    secureJsonData:
-      password: spectra_password
-    jsonData:
-      sslmode: disable
+    url: http://influxdb:8086
     isDefault: true
     editable: true
+    uid: spectraiim-influxdb
+    jsonData:
+      version: Flux
+      organization: spectra_org
+      defaultBucket: network_logs
+      tlsSkipVerify: true
+    secureJsonData:
+      token: spectra_token

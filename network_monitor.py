@@ -1,72 +1,34 @@
-import shutil
 import time
 import subprocess
 import platform
+import shutil
+import json
+import re
 from datetime import datetime, timedelta
-from typing import Optional, Tuple, Any
+from typing import Optional, Tuple, Dict, Any
 
-import psycopg2
-from psycopg2 import sql, OperationalError, IntegrityError
-from speedtest import Speedtest, ConfigRetrievalError
+from influxdb_client import InfluxDBClient, Point, WritePrecision
+from influxdb_client.client.write_api import SYNCHRONOUS
 
 from config import Config
 from logging_setup import setup_logger
 
 logger = setup_logger()
 
-DB_CONFIG = {
-    "dbname": Config.DB_NAME,
-    "user": Config.DB_USER,
-    "password": Config.DB_PASSWORD,
-    "host": Config.DB_HOST,
-    "port": Config.DB_PORT,
-}
+# InfluxDB configuration
+INFLUXDB_URL: str = Config.INFLUXDB_URL
+INFLUXDB_TOKEN: str = Config.INFLUXDB_TOKEN
+INFLUXDB_ORG: str = Config.INFLUXDB_ORG
+INFLUXDB_BUCKET: str = Config.INFLUXDB_BUCKET
 
-def validate_database_connection() -> None:
-    """Validate database connection for the application user."""
-    try:
-        with psycopg2.connect(**DB_CONFIG):
-            logger.info("Database connection successful!")
-    except OperationalError as op_err:
-        logger.error(f"Operational error during database connection: {op_err}")
-        raise
-    except Exception as e:
-        logger.exception(f"Unexpected error connecting to database: {e}")
-        raise
-
-def setup_database() -> None:
-    """Create the PostgreSQL database table if it does not exist."""
-    logger.info("Starting database setup...")
-    try:
-        validate_database_connection()
-        create_table_query = """
-CREATE TABLE IF NOT EXISTS network_logs (
-id SERIAL PRIMARY KEY,
-timestamp TIMESTAMP NOT NULL,
-latency_ms REAL,
-packet_loss REAL,
-jitter_ms REAL,
-download_speed REAL,
-upload_speed REAL,
-dns_resolution_time_ms REAL,
-downtime BOOLEAN,
-traceroute TEXT
+client = InfluxDBClient(
+    url=INFLUXDB_URL,
+    token=INFLUXDB_TOKEN,
+    org=INFLUXDB_ORG
 )
-        """
-        with psycopg2.connect(**DB_CONFIG) as conn:
-            with conn.cursor() as cursor:
-                cursor.execute(create_table_query)
-                conn.commit()
-                logger.info("Table 'network_logs' is ready.")
-    except psycopg2.Error as db_err:
-        logger.error(f"Database error during setup: {db_err}")
-        raise
-    except Exception as e:
-        logger.exception(f"Unexpected error during database setup: {e}")
-        raise
+write_api = client.write_api(write_options=SYNCHRONOUS)
 
 def ping_target(target: str) -> Tuple[Optional[float], Optional[float], float]:
-    """Ping a target and return latency, jitter, and packet loss."""
     logger.info(f"Pinging target: {target}")
     try:
         result = subprocess.run(
@@ -76,7 +38,7 @@ def ping_target(target: str) -> Tuple[Optional[float], Optional[float], float]:
             timeout=10
         )
         if result.returncode == 0:
-            lines = result.stdout.split("\n")
+            lines = result.stdout.splitlines()
             rtt_line = next((line for line in lines if "rtt min/avg/max" in line), None)
             if rtt_line:
                 stats = rtt_line.split("=")[1].strip().replace(" ms", "")
@@ -84,12 +46,10 @@ def ping_target(target: str) -> Tuple[Optional[float], Optional[float], float]:
                 jitter = max_rtt - min_rtt
                 logger.debug(f"Ping stats: Latency={avg_rtt} ms, Jitter={jitter} ms")
                 return avg_rtt, jitter, 0.0
-            else:
-                logger.warning("Ping output did not contain RTT stats.")
-                return None, None, 100.0
-        else:
-            logger.warning(f"Ping command failed with return code {result.returncode}.")
+            logger.warning("Ping output did not contain RTT stats.")
             return None, None, 100.0
+        logger.warning(f"Ping command failed with return code {result.returncode}.")
+        return None, None, 100.0
     except subprocess.TimeoutExpired:
         logger.error(f"Ping command timed out for target: {target}")
         return None, None, 100.0
@@ -98,13 +58,13 @@ def ping_target(target: str) -> Tuple[Optional[float], Optional[float], float]:
         return None, None, 100.0
 
 def test_dns_resolution(domain: str) -> Optional[float]:
-    """Test DNS resolution time."""
     logger.info(f"Testing DNS resolution for domain: {domain}")
     try:
         start_time = time.time()
         result = subprocess.run(
             ["nslookup", domain],
             capture_output=True,
+            text=True,
             timeout=5
         )
         end_time = time.time()
@@ -112,9 +72,8 @@ def test_dns_resolution(domain: str) -> Optional[float]:
             resolution_time = (end_time - start_time) * 1000
             logger.debug(f"DNS resolution time for {domain}: {resolution_time:.2f} ms")
             return resolution_time
-        else:
-            logger.warning(f"DNS resolution command failed with return code {result.returncode}.")
-            return None
+        logger.warning(f"DNS resolution command failed with return code {result.returncode}.")
+        return None
     except subprocess.TimeoutExpired:
         logger.error(f"DNS resolution command timed out for domain: {domain}")
         return None
@@ -123,100 +82,154 @@ def test_dns_resolution(domain: str) -> Optional[float]:
         return None
 
 def test_speed() -> Tuple[Optional[float], Optional[float]]:
-    """Perform speed tests and return download/upload speeds."""
     logger.info("Starting speed test.")
     try:
+        from speedtest import Speedtest
         st = Speedtest()
         st.get_best_server()
         download_speed = st.download() / 1_000_000
         upload_speed = st.upload() / 1_000_000
         logger.debug(f"Speed test results: Download={download_speed:.2f} Mbps, Upload={upload_speed:.2f} Mbps")
         return download_speed, upload_speed
-    except ConfigRetrievalError as e:
-        logger.error(f"Blocked by Speedtest API: {e}")
-        return None, None
     except Exception as e:
         logger.error(f"Error during speed test: {e}")
         return None, None
 
-def perform_traceroute(target: str) -> str:
-    """Perform a traceroute and return the path as a string, or a message if unavailable."""
-    logger.info(f"Starting traceroute to target: {target}")
+def perform_traceroute(target: str) -> Dict[str, Any]:
+    """
+    Perform a traceroute and return a summary dict:
+    {
+        "hop_count": int,
+        "last_hop_ip": str,
+        "max_hop_latency": float,
+        "hops_json": str,  # JSON string of hops
+        "full_text": str
+    }
+    """
     if platform.system() == "Windows":
         traceroute_cmd = "tracert"
+        traceroute_args = [traceroute_cmd, target]
     else:
         traceroute_cmd = "traceroute"
+        traceroute_args = [traceroute_cmd, "-n", target]
 
-    # Check if the command exists
     if shutil.which(traceroute_cmd) is None:
-        logger.warning(f"{traceroute_cmd} is not available on this system.")
-        return f"{traceroute_cmd} not available"
+        return {
+            "hop_count": None,
+            "last_hop_ip": None,
+            "max_hop_latency": None,
+            "hops_json": "[]",
+            "full_text": f"{traceroute_cmd} not available"
+        }
 
-    traceroute_command = [traceroute_cmd, target]
     try:
-        result = subprocess.run(
-            traceroute_command,
-            capture_output=True,
-            text=True,
-            timeout=30,
-            encoding="utf-8",
-            errors="replace"
-        )
-        if result.returncode == 0:
-            logger.debug(f"Traceroute to {target} completed successfully.")
-            return result.stdout.strip()
-        else:
-            logger.warning(f"Traceroute to {target} failed with return code {result.returncode}.")
-            return "Traceroute failed"
+            result = subprocess.run(
+                traceroute_args,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                encoding="utf-8",
+                errors="replace"
+            )
+            output = result.stdout.strip()
+            hops = []
+            max_latency = None
+
+            if result.returncode == 0:
+                lines = output.splitlines()
+                for line in lines[1:]:
+                    # Match: hop_num, then pairs of (ip, latency)
+                    m = re.match(r"\s*(\d+)\s+(.*)", line)
+                    if not m:
+                        continue
+                    hop_num = int(m.group(1))
+                    rest = m.group(2)
+                    # Find all (ip, latency) pairs
+                    pairs = re.findall(r"([\d\.]+)\s+([\d\.]+)\s*ms", rest)
+                    if pairs:
+                        for ip, latency in pairs:
+                            lat = float(latency)
+                            hops.append({
+                                "hop": hop_num,
+                                "ip": ip,
+                                "latency": lat
+                            })
+                            if max_latency is None or lat > max_latency:
+                                max_latency = lat
+                    else:
+                        # If no pairs, maybe all stars/timeouts, skip
+                        continue
+
+            last_hop_ip = hops[-1]["ip"] if hops else None
+
+            return {
+                "hop_count": len(set([h['hop'] for h in hops])),  # unique hop numbers
+                "last_hop_ip": last_hop_ip,
+                "max_hop_latency": max_latency,
+                "hops_json": json.dumps(hops),
+                "full_text": output
+            }
     except subprocess.TimeoutExpired:
-        logger.error(f"Traceroute command timed out for target: {target}")
-        return "Traceroute timeout"
+        return {
+            "hop_count": None,
+            "last_hop_ip": None,
+            "max_hop_latency": None,
+            "hops_json": "[]",
+            "full_text": "Traceroute timeout"
+        }
     except Exception as e:
-        logger.exception(f"Unexpected error during traceroute to {target}: {e}")
-        return "Traceroute error"
+        return {
+            "hop_count": None,
+            "last_hop_ip": None,
+            "max_hop_latency": None,
+            "hops_json": "[]",
+            "full_text": f"Traceroute error: {e}"
+        }
 
-def log_to_database(log_data: Tuple[Any, ...]) -> None:
-    """Log results into the PostgreSQL database."""
-    logger.info("Logging data to the database.")
-    insert_query = """
-INSERT INTO network_logs (
-timestamp, latency_ms, jitter_ms, packet_loss,
-download_speed, upload_speed, dns_resolution_time_ms,
-downtime, traceroute
-) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-    """
+def log_to_influxdb(
+    timestamp: datetime,
+    latency: Optional[float],
+    jitter: Optional[float],
+    packet_loss: Optional[float],
+    download_speed: Optional[float],
+    upload_speed: Optional[float],
+    dns_time: Optional[float],
+    is_downtime: bool,
+    traceroute_summary: Dict[str, Any]
+) -> None:
+    """Log results into InfluxDB."""
     try:
-        with psycopg2.connect(**DB_CONFIG) as conn:
-            with conn.cursor() as cursor:
-                cursor.execute(insert_query, log_data)
-                conn.commit()
-                logger.debug(f"Data logged successfully: {log_data}")
-    except IntegrityError as int_err:
-        logger.error(f"Integrity error while logging data: {int_err}")
-    except OperationalError as op_err:
-        logger.error(f"Operational error: {op_err}. Retrying...")
-        time.sleep(5)
-        try:
-            with psycopg2.connect(**DB_CONFIG) as conn:
-                with conn.cursor() as cursor:
-                    cursor.execute(insert_query, log_data)
-                    conn.commit()
-                    logger.debug(f"Data logged successfully after retry: {log_data}")
-        except Exception as retry_err:
-            logger.exception(f"Retry failed: {retry_err}")
+        point = (
+            Point("network_log")
+            .tag("target", Config.PING_TARGET)
+            .field("latency_ms", latency if latency is not None else float("nan"))
+            .field("jitter_ms", jitter if jitter is not None else float("nan"))
+            .field("packet_loss", packet_loss if packet_loss is not None else float("nan"))
+            .field("download_speed", download_speed if download_speed is not None else float("nan"))
+            .field("upload_speed", upload_speed if upload_speed is not None else float("nan"))
+            .field("dns_resolution_time_ms", dns_time if dns_time is not None else float("nan"))
+            .field("downtime", int(is_downtime))
+            .field("traceroute", traceroute_summary["full_text"])
+            .field("traceroute_hop_count", traceroute_summary["hop_count"] if traceroute_summary["hop_count"] is not None else 0)
+            .field("traceroute_last_hop_ip", traceroute_summary["last_hop_ip"] if traceroute_summary["last_hop_ip"] is not None else "")
+            .field("traceroute_max_hop_latency", traceroute_summary["max_hop_latency"] if traceroute_summary["max_hop_latency"] is not None else float("nan"))
+            .field("traceroute_hops_json", traceroute_summary["hops_json"])
+            .time(timestamp, WritePrecision.NS)
+        )
+        write_api.write(bucket=INFLUXDB_BUCKET, org=INFLUXDB_ORG, record=point)
+        logger.debug("Data logged to InfluxDB.")
     except Exception as e:
-        logger.exception(f"Unexpected error while logging to database: {e}")
+        logger.exception(f"Error writing to InfluxDB: {e}")
 
 def monitor_network() -> None:
-    """Continuously monitor the network and log metrics."""
     logger.info("Starting network monitoring...")
 
-    last_speedtest_time = datetime.min
-    downtime_start = None
-    cumulative_downtime = timedelta(0)
+    last_speedtest_time: datetime = datetime.min
+    downtime_start: Optional[datetime] = None
+    cumulative_downtime: timedelta = timedelta(0)
 
     while True:
-        timestamp = datetime.now()
+        timestamp: datetime = datetime.utcnow()
 
         latency, jitter, packet_loss = ping_target(Config.PING_TARGET)
         dns_time = test_dns_resolution(Config.DNS_TEST_DOMAIN)
@@ -235,7 +248,7 @@ def monitor_network() -> None:
         else:
             download_speed, upload_speed = None, None
 
-        traceroute = perform_traceroute(Config.PING_TARGET)
+        traceroute_summary = perform_traceroute(Config.PING_TARGET)
 
         is_downtime = latency is None
         if is_downtime:
@@ -249,19 +262,21 @@ def monitor_network() -> None:
                 logger.info(f"Downtime ended. Duration: {downtime_duration}. Total downtime: {cumulative_downtime}.")
                 downtime_start = None
 
-        log_data = (
+        log_to_influxdb(
             timestamp, latency, jitter, packet_loss,
             download_speed, upload_speed, dns_time,
-            is_downtime, traceroute
+            is_downtime, traceroute_summary
         )
-
-        log_to_database(log_data)
 
         logger.info(
             f"[{timestamp}] Latency: {latency} ms, Jitter: {jitter} ms, "
             f"Packet Loss: {packet_loss}%, Download: {download_speed or 'N/A'} Mbps, "
             f"Upload: {upload_speed or 'N/A'} Mbps, DNS Time: {dns_time} ms, "
-            f"Downtime: {is_downtime}, Traceroute: {traceroute[:100]}..."
+            f"Downtime: {is_downtime}, "
+            f"Traceroute hops: {traceroute_summary['hop_count']}, "
+            f"Last hop IP: {traceroute_summary['last_hop_ip']}, "
+            f"Max hop latency: {traceroute_summary['max_hop_latency']}, "
+            f"Traceroute: {traceroute_summary['full_text'][:100]}..."
         )
 
         time.sleep(Config.PING_INTERVAL)
@@ -269,7 +284,6 @@ def monitor_network() -> None:
 def main() -> None:
     try:
         logger.info("Initializing the SpectraIIM network monitoring service...")
-        setup_database()
         monitor_network()
     except KeyboardInterrupt:
         logger.warning("SpectraIIM monitoring service interrupted by user. Exiting...")
